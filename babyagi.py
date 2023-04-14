@@ -7,6 +7,9 @@ from langchain.vectorstores import FAISS
 from langchain.vectorstores.base import VectorStore
 from pydantic import BaseModel, Field
 import streamlit as st
+import configparser
+import os
+
 
 class TaskCreationChain(LLMChain):
     @classmethod
@@ -210,6 +213,9 @@ class BabyAGI(BaseModel):
                     )
                 )
             num_iters += 1
+            progress = (num_iters / max_iterations)
+            st.progress(progress)
+
             if max_iterations is not None and num_iters == max_iterations:
                 self.print_task_ending()
                 break
@@ -240,6 +246,26 @@ class BabyAGI(BaseModel):
         controller.add_task({"task_id": 1, "task_name": first_task})
         return controller
 
+def read_api_key(config_file="config.ini"):
+    config = configparser.ConfigParser()
+    config.read(config_file)
+
+    try:
+        return config["API"]["key"]
+    except KeyError:
+        return ""
+    
+def save_api_key(api_key, config_file="config.ini"):
+    config = configparser.ConfigParser()
+    config.read(config_file)
+
+    if "API" not in config.sections():
+        config.add_section("API")
+
+    config["API"]["key"] = api_key
+
+    with open(config_file, "w") as f:
+        config.write(f)
 
 def main():
     st.set_page_config(
@@ -248,27 +274,44 @@ def main():
         layout="centered",
     )
 
+    st.title("BabyAGI UI")
+
     with st.sidebar:
-        openai_api_key = st.text_input('Your OpenAI API KEY', type="password")
-        model_name = st.selectbox("Model name", options=["gpt-3.5-turbo", "gpt-4", "text-davinci-003"])
-        temperature = st.slider(
+        api_expander = st.expander("API Configuration")
+        stored_api_key = read_api_key()
+        save_key_button = api_expander.button("Save API Key")
+        openai_api_key = api_expander.text_input("Your OpenAI API KEY", value=stored_api_key, type="password")
+
+        model_name = api_expander.selectbox("Model name", options=["gpt-3.5-turbo", "gpt-4", "text-davinci-003"])
+        api_expander.caption("Select the language model you want to use.")
+
+
+        api_expander.header("Model Parameters")
+        temperature = api_expander.slider(
             label="Temperature",
             min_value=0.0,
             max_value=1.0,
             step=0.1,
             value=0.5,
+            help="A higher temperature results in more diverse outputs, while a lower temperature makes the model more deterministic."
         )
 
-    st.title("BabyAGI UI")
-    objective = st.text_input("Input Ultimate goal", "Solve world hunger")
-    first_task = st.text_input("Input Where to start", "Develop a task list")
-    max_iterations = st.number_input("Max iterations", value=3, min_value=1, step=1)
-    button = st.button("Run")
+    st.header("Objective and Initial Task")
+    objective = st.text_input("Input ultimate goal", "Solve world hunger", help="Enter the main objective or goal for BabyAGI.")
+    first_task = st.text_input("Input where to start", "Develop a task list", help="Enter the first task BabyAGI should start with.")
+    
+    st.header("Execution Parameters")
+    max_iterations = st.number_input("Max iterations", value=3, min_value=1, step=1, help="Enter the maximum number of iterations BabyAGI should run.")
+
+    button_col1, button_col2 = st.columns([1, 1])
+    run_button = button_col1.button("Run")
+    
+    stop_button = button_col2.button("Stop")
 
     embedding_model = HuggingFaceEmbeddings()
     vectorstore = FAISS.from_texts(["_"], embedding_model, metadatas=[{"task":first_task}])
 
-    if button:
+    if run_button:
         try:
             baby_agi = BabyAGI.from_llm_and_objectives(
                 llm=OpenAI(openai_api_key=openai_api_key, temperature=temperature, model_name=model_name),
@@ -279,7 +322,16 @@ def main():
             )
             baby_agi.run(max_iterations=max_iterations)
         except Exception as e:
-            st.error(e)
+            st.error(f"An error occurred: {str(e)}")
+
+
+    if save_key_button:
+        save_api_key(openai_api_key)
+        st.success("API key saved.")
+
+
+    if stop_button:
+        st.stop()
 
 if __name__ == "__main__":
     main()
